@@ -49,4 +49,5 @@ def get_invoice_status(invoice_no):
 
 # === TELEGRAM ОБРАБОТЧИКИ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[Key]()]()
+    keyboard = [[KeyboardButton("Выставить счёт"), KeyboardButton("Статус счёта")]]
+
