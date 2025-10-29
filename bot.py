@@ -1,103 +1,159 @@
 import os
-import requests
+import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import requests
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    ConversationHandler,
+)
 
-# === Настройки ===
-EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = os.getenv("APP_URL")  # URL приложения на Render, например https://my-bot.onrender.com
-API_URL = "https://api.express-pay.by/v1/invoices"
+# Логирование (помогает при отладке на Render)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+# Константы
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен Telegram бота
+API_TOKEN = os.getenv("API_TOKEN")  # Токен ExpressPay
+APP_URL = os.getenv("APP_URL")      # URL Render-приложения, например: https://my-bot.onrender.com
+
+EXPRESS_URL = "https://api.express-pay.by/v1/invoices"
+
+# Этапы диалога
+ASK_AMOUNT = 1
+ASK_INVOICE_NO = 2
 
 
-# === Команда /start ===
+# ---------- Команды ----------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главное меню"""
     keyboard = [
-        [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
-        [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
+        [KeyboardButton("💰 Выставить счёт"), KeyboardButton("📄 Статус счёта")]
     ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
+        "Привет! Я бот для работы с ExpressPay.\n"
         "Выберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=reply_markup
     )
 
 
-# === Обработка нажатий кнопок ===
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# ---------- 1. ВЫСТАВЛЕНИЕ СЧЁТА ----------
 
-    if query.data == "create_invoice":
-        await query.message.reply_text("Введите сумму счёта (например: 25,50):")
-        context.user_data["action"] = "create_invoice"
-    elif query.data == "check_status":
-        await query.message.reply_text("Введите номер счёта:")
-        context.user_data["action"] = "check_status"
+async def invoice_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите сумму счёта (например, 25.50):")
+    return ASK_AMOUNT
 
 
-# === Обработка сообщений пользователя ===
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = context.user_data.get("action")
+async def create_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount = update.message.text.strip().replace(".", ",")  # API требует запятую
+    date_str = datetime.now().strftime("%d%m%y")
+    order_no = "001"  # можно сделать автоинкрементом, если нужно
+    account_no = f"{date_str}{order_no}"
 
-    if action == "create_invoice":
-        amount = update.message.text.strip()
-        today = datetime.now().strftime("%d%m%y")
-        account_no = f"{today}001"
-        data = {
-            "Token": EXPRESS_PAY_TOKEN,
-            "AccountNo": account_no,
-            "Amount": amount,
-            "Currency": 933,
-            "Info": "организация доставки"
+    payload = {
+        "AccountNo": account_no,
+        "Amount": amount,
+        "Currency": 933,
+        "Info": "организация доставки"
+    }
+
+    url = f"{EXPRESS_URL}?token={API_TOKEN}"
+    response = requests.post(url, data=payload)
+
+    if response.status_code == 200:
+        invoice_no = response.json().get("InvoiceNo")
+        await update.message.reply_text(
+            f"✅ Счёт успешно выставлен!\n\n"
+            f"🔸 Номер счёта в ExpressPay: {invoice_no}\n"
+            f"🔹 Ваш номер счёта (AccountNo): {account_no}"
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ Ошибка при выставлении счёта.\nКод: {response.status_code}\nТекст: {response.text}"
+        )
+
+    return ConversationHandler.END
+
+
+# ---------- 2. ПРОВЕРКА СТАТУСА СЧЁТА ----------
+
+async def status_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите номер счёта (InvoiceNo):")
+    return ASK_INVOICE_NO
+
+
+async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    invoice_no = update.message.text.strip()
+    url = f"{EXPRESS_URL}/{invoice_no}/status?token={API_TOKEN}"
+
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        data = response.json()
+        status_code = data.get("Status")
+
+        statuses = {
+            1: "⏳ Ожидает оплату",
+            2: "⚠️ Просрочен",
+            3: "✅ Оплачен",
+            4: "💵 Оплачен частично",
+            5: "❌ Отменён",
+            6: "💳 Оплачен картой",
+            7: "↩️ Платёж возвращён"
         }
 
-        response = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
-        if response.status_code == 200:
-            invoice_no = response.json().get("InvoiceNo")
-            await update.message.reply_text(f"✅ Счёт выставлен!\nНомер счёта: {invoice_no}")
-        else:
-            await update.message.reply_text(f"❌ Ошибка при выставлении счёта:\n{response.text}")
+        status_text = statuses.get(status_code, "Неизвестный статус")
+        await update.message.reply_text(f"Статус счёта №{invoice_no}: {status_text}")
+    else:
+        await update.message.reply_text(
+            f"❌ Ошибка при получении статуса.\nКод: {response.status_code}\nТекст: {response.text}"
+        )
 
-        context.user_data.pop("action", None)
-
-    elif action == "check_status":
-        invoice_no = update.message.text.strip()
-        response = requests.get(f"{API_URL}/{invoice_no}/status?token={EXPRESS_PAY_TOKEN}")
-        if response.status_code == 200:
-            status = response.json().get("Status")
-            statuses = {
-                1: "Ожидает оплату",
-                2: "Просрочен",
-                3: "Оплачен",
-                4: "Оплачен частично",
-                5: "Отменен",
-                6: "Оплачен картой",
-                7: "Платёж возвращен"
-            }
-            await update.message.reply_text(
-                f"📊 Статус счёта {invoice_no}: {statuses.get(status, 'Неизвестен')}"
-            )
-        else:
-            await update.message.reply_text(f"❌ Ошибка при получении статуса:\n{response.text}")
-
-        context.user_data.pop("action", None)
+    return ConversationHandler.END
 
 
-# === Основная функция ===
+# ---------- ОБРАБОТКА ОТМЕНЫ ----------
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Действие отменено.")
+    return ConversationHandler.END
+
+
+# ---------- ГЛАВНАЯ ФУНКЦИЯ ----------
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Диалог: выставление счёта
+    invoice_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("(^💰 Выставить счёт$)"), invoice_start)],
+        states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_invoice)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    # Диалог: статус счёта
+    status_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("(^📄 Статус счёта$)"), status_start)],
+        states={ASK_INVOICE_NO: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_status)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(invoice_conv)
+    app.add_handler(status_conv)
 
-    port = int(os.environ.get("PORT", 8443))
-
-    # Настройка Webhook
+    # ✅ Запуск через webhook (для Render)
     app.run_webhook(
         listen="0.0.0.0",
-        port=port,
+        port=int(os.getenv("PORT", 8443)),
         url_path=BOT_TOKEN,
         webhook_url=f"{APP_URL}/{BOT_TOKEN}"
     )
