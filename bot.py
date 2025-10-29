@@ -12,17 +12,15 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-# Логирование (помогает при отладке на Render)
+# ------------------- НАСТРОЙКИ -------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# Константы
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен Telegram бота
-API_TOKEN = os.getenv("API_TOKEN")  # Токен ExpressPay
-APP_URL = os.getenv("APP_URL")      # URL Render-приложения, например: https://my-bot.onrender.com
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # токен Telegram-бота
+API_TOKEN = os.getenv("API_TOKEN")  # токен ExpressPay
+APP_URL = os.getenv("APP_URL")      # URL Render-приложения (https://my-bot.onrender.com)
 EXPRESS_URL = "https://api.express-pay.by/v1/invoices"
 
 # Этапы диалога
@@ -30,32 +28,29 @@ ASK_AMOUNT = 1
 ASK_INVOICE_NO = 2
 
 
-# ---------- Команды ----------
-
+# ------------------- /start -------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главное меню"""
     keyboard = [
         [KeyboardButton("💰 Выставить счёт"), KeyboardButton("📄 Статус счёта")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "Привет! Я бот для работы с ExpressPay.\n"
+        "👋 Привет! Я бот для работы с ExpressPay.\n\n"
         "Выберите действие:",
         reply_markup=reply_markup
     )
 
 
-# ---------- 1. ВЫСТАВЛЕНИЕ СЧЁТА ----------
-
+# ------------------- 1. Выставление счёта -------------------
 async def invoice_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите сумму счёта (например, 25.50):")
     return ASK_AMOUNT
 
 
 async def create_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    amount = update.message.text.strip().replace(".", ",")  # API требует запятую
+    amount = update.message.text.strip().replace(".", ",")  # ExpressPay требует запятую
     date_str = datetime.now().strftime("%d%m%y")
-    order_no = "001"  # можно сделать автоинкрементом, если нужно
+    order_no = "001"
     account_no = f"{date_str}{order_no}"
 
     payload = {
@@ -65,26 +60,31 @@ async def create_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Info": "организация доставки"
     }
 
-    url = f"{EXPRESS_URL}?token={API_TOKEN}"
-    response = requests.post(url, data=payload)
+    headers = {"Authorization": f"Bearer {API_TOKEN}"}
 
-    if response.status_code == 200:
-        invoice_no = response.json().get("InvoiceNo")
-        await update.message.reply_text(
-            f"✅ Счёт успешно выставлен!\n\n"
-            f"🔸 Номер счёта в ExpressPay: {invoice_no}\n"
-            f"🔹 Ваш номер счёта (AccountNo): {account_no}"
-        )
-    else:
-        await update.message.reply_text(
-            f"❌ Ошибка при выставлении счёта.\nКод: {response.status_code}\nТекст: {response.text}"
-        )
+    try:
+        response = requests.post(EXPRESS_URL, data=payload, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            invoice_no = data.get("InvoiceNo")
+            await update.message.reply_text(
+                f"✅ Счёт успешно выставлен!\n\n"
+                f"🔸 Номер счёта в ExpressPay: {invoice_no}\n"
+                f"🔹 Ваш номер счёта (AccountNo): {account_no}"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка при выставлении счёта.\n"
+                f"Код: {response.status_code}\n"
+                f"Текст: {response.text}"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Ошибка соединения: {e}")
 
     return ConversationHandler.END
 
 
-# ---------- 2. ПРОВЕРКА СТАТУСА СЧЁТА ----------
-
+# ------------------- 2. Проверка статуса счёта -------------------
 async def status_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите номер счёта (InvoiceNo):")
     return ASK_INVOICE_NO
@@ -92,54 +92,57 @@ async def status_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invoice_no = update.message.text.strip()
-    url = f"{EXPRESS_URL}/{invoice_no}/status?token={API_TOKEN}"
+    url = f"{EXPRESS_URL}/{invoice_no}/status"
+    headers = {"Authorization": f"Bearer {API_TOKEN}"}
 
-    response = requests.get(url)
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            status_code = data.get("Status")
 
-    if response.status_code == 200:
-        data = response.json()
-        status_code = data.get("Status")
+            statuses = {
+                1: "⏳ Ожидает оплату",
+                2: "⚠️ Просрочен",
+                3: "✅ Оплачен",
+                4: "💵 Оплачен частично",
+                5: "❌ Отменён",
+                6: "💳 Оплачен картой",
+                7: "↩️ Платёж возвращён"
+            }
 
-        statuses = {
-            1: "⏳ Ожидает оплату",
-            2: "⚠️ Просрочен",
-            3: "✅ Оплачен",
-            4: "💵 Оплачен частично",
-            5: "❌ Отменён",
-            6: "💳 Оплачен картой",
-            7: "↩️ Платёж возвращён"
-        }
-
-        status_text = statuses.get(status_code, "Неизвестный статус")
-        await update.message.reply_text(f"Статус счёта №{invoice_no}: {status_text}")
-    else:
-        await update.message.reply_text(
-            f"❌ Ошибка при получении статуса.\nКод: {response.status_code}\nТекст: {response.text}"
-        )
+            status_text = statuses.get(status_code, "Неизвестный статус")
+            await update.message.reply_text(f"Статус счёта №{invoice_no}: {status_text}")
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка при получении статуса.\n"
+                f"Код: {response.status_code}\n"
+                f"Текст: {response.text}"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Ошибка соединения: {e}")
 
     return ConversationHandler.END
 
 
-# ---------- ОБРАБОТКА ОТМЕНЫ ----------
-
+# ------------------- Отмена -------------------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
 
-# ---------- ГЛАВНАЯ ФУНКЦИЯ ----------
-
+# ------------------- MAIN -------------------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Диалог: выставление счёта
+    # Диалог для выставления счёта
     invoice_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("(^💰 Выставить счёт$)"), invoice_start)],
         states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_invoice)]},
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # Диалог: статус счёта
+    # Диалог для проверки статуса
     status_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("(^📄 Статус счёта$)"), status_start)],
         states={ASK_INVOICE_NO: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_status)]},
@@ -150,7 +153,7 @@ def main():
     app.add_handler(invoice_conv)
     app.add_handler(status_conv)
 
-    # ✅ Запуск через webhook (для Render)
+    # Запуск через webhook (Render)
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
