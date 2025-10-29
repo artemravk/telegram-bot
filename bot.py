@@ -60,10 +60,14 @@ async def create_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Info": "организация доставки"
     }
 
-    headers = {"Authorization": f"Bearer {API_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     try:
-        response = requests.post(EXPRESS_URL, data=payload, headers=headers)
+        response = requests.post(EXPRESS_URL, json=payload, headers=headers)
+
         if response.status_code == 200:
             data = response.json()
             invoice_no = data.get("InvoiceNo")
@@ -92,7 +96,7 @@ async def status_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invoice_no = update.message.text.strip()
-    url = f"{EXPRESS_URL}/{invoice_no}/status"
+    url = f"{EXPRESS_URL}/{invoice_no}?cmd=status"
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
 
     try:
@@ -135,14 +139,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Диалог для выставления счёта
     invoice_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("(^💰 Выставить счёт$)"), invoice_start)],
         states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_invoice)]},
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # Диалог для проверки статуса
     status_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("(^📄 Статус счёта$)"), status_start)],
         states={ASK_INVOICE_NO: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_status)]},
@@ -153,7 +155,6 @@ def main():
     app.add_handler(invoice_conv)
     app.add_handler(status_conv)
 
-    # Запуск через webhook (Render)
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
