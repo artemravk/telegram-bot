@@ -4,17 +4,26 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
+# === Настройки ===
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+APP_URL = os.getenv("APP_URL")  # URL приложения на Render, например https://my-bot.onrender.com
 API_URL = "https://api.express-pay.by/v1/invoices"
 
+
+# === Команда /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
         [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
     ]
-    await update.message.reply_text("Выберите действие:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        "Выберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
+
+# === Обработка нажатий кнопок ===
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -26,6 +35,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
 
+
+# === Обработка сообщений пользователя ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
@@ -40,19 +51,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Currency": 933,
             "Info": "организация доставки"
         }
-        r = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
-        if r.status_code == 200:
-            invoice_no = r.json().get("InvoiceNo")
+
+        response = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
+        if response.status_code == 200:
+            invoice_no = response.json().get("InvoiceNo")
             await update.message.reply_text(f"✅ Счёт выставлен!\nНомер счёта: {invoice_no}")
         else:
-            await update.message.reply_text(f"❌ Ошибка: {r.text}")
+            await update.message.reply_text(f"❌ Ошибка при выставлении счёта:\n{response.text}")
+
         context.user_data.pop("action", None)
 
     elif action == "check_status":
         invoice_no = update.message.text.strip()
-        r = requests.get(f"{API_URL}/{invoice_no}/status?token={EXPRESS_PAY_TOKEN}")
-        if r.status_code == 200:
-            status = r.json().get("Status")
+        response = requests.get(f"{API_URL}/{invoice_no}/status?token={EXPRESS_PAY_TOKEN}")
+        if response.status_code == 200:
+            status = response.json().get("Status")
             statuses = {
                 1: "Ожидает оплату",
                 2: "Просрочен",
@@ -62,17 +75,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 6: "Оплачен картой",
                 7: "Платёж возвращен"
             }
-            await update.message.reply_text(f"📊 Статус счёта {invoice_no}: {statuses.get(status, 'Неизвестен')}")
+            await update.message.reply_text(
+                f"📊 Статус счёта {invoice_no}: {statuses.get(status, 'Неизвестен')}"
+            )
         else:
-            await update.message.reply_text(f"❌ Ошибка: {r.text}")
+            await update.message.reply_text(f"❌ Ошибка при получении статуса:\n{response.text}")
+
         context.user_data.pop("action", None)
 
+
+# === Основная функция ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+
+    port = int(os.environ.get("PORT", 8443))
+
+    # Настройка Webhook
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+    )
+
 
 if __name__ == "__main__":
     main()
