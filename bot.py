@@ -17,17 +17,22 @@ from telegram.ext import (
 from aiohttp import web
 
 # === НАСТРОЙКИ ===
+import os
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESSPAY_TOKEN")
-APP_URL = os.getenv("RENDER_EXTERNAL_URL")
+EXPRESS_PAY_SECRET = os.getenv("EXPRESSPAY_SECRET")
+APP_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("APP_URL")  # на случай, если у тебя была app_url
 
 print("🔍 Проверка переменных окружения:")
 print("BOT_TOKEN:", "✅ найден" if BOT_TOKEN else "❌ отсутствует")
 print("EXPRESSPAY_TOKEN:", "✅ найден" if EXPRESS_PAY_TOKEN else "❌ отсутствует")
-print("RENDER_EXTERNAL_URL:", os.getenv("RENDER_EXTERNAL_URL") or "❌ отсутствует")
+print("EXPRESSPAY_SECRET:", "✅ найден" if EXPRESS_PAY_SECRET else "❌ отсутствует")
+print("APP_URL:", APP_URL or "❌ отсутствует")
 
 if not BOT_TOKEN or not EXPRESS_PAY_TOKEN:
     raise ValueError("❌ Проверьте, что заданы BOT_TOKEN и EXPRESSPAY_TOKEN")
+
 
 
 # === ЛОГИ ===
