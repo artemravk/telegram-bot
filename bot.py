@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 # === Настройки ===
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = os.getenv("APP_URL")  # URL приложения на Render
+APP_URL = os.getenv("APP_URL")
 API_URL = "https://api.express-pay.by/v1/invoices"
 ACCOUNT_FILE = "account_no.txt"
 
@@ -20,9 +20,16 @@ def main_menu():
     ])
 
 
+# === Клавиатура с кнопкой копирования ===
+def invoice_menu(account_display):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Копировать номер счёта", callback_data=f"copy_{account_display}")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+    ])
+
+
 # === Функции для управления AccountNo ===
 def get_next_account_no():
-    """Читает последний номер счёта из файла и увеличивает на 1"""
     today = datetime.now().strftime("%d%m%y")
 
     if os.path.exists(ACCOUNT_FILE):
@@ -31,11 +38,10 @@ def get_next_account_no():
     else:
         data = ""
 
-    # если дата изменилась — начинаем с 001
     if not data.startswith(today):
         next_no = 1
     else:
-        last_no = int(data[6:])  # берём часть после даты
+        last_no = int(data[6:])
         next_no = last_no + 1
 
     new_account_no = f"{today}{next_no:03d}"
@@ -48,10 +54,7 @@ def get_next_account_no():
 
 # === Команда /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Выберите действие:",
-        reply_markup=main_menu()
-    )
+    await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
 # === Обработка нажатий кнопок ===
@@ -59,13 +62,23 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "create_invoice":
+    # Главное меню
+    if query.data == "main_menu":
+        await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
+
+    elif query.data == "create_invoice":
         await query.message.reply_text("Введите сумму счёта (например: 25,50):")
         context.user_data["action"] = "create_invoice"
 
     elif query.data == "check_status":
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
+
+    elif query.data.startswith("copy_"):
+        account_display = query.data.replace("copy_", "")
+        await query.message.reply_text(f"📋 Номер счёта: `{account_display}`", parse_mode="Markdown")
+
+        await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
 # === Получение детальной информации о счёте ===
@@ -99,10 +112,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if details:
                 amount_info = details.get("Amount")
                 account_info = details.get("AccountNo")
+                account_display = f"35077-1-{account_info}"
+
                 await update.message.reply_text(
                     f"✅ Счёт на {amount_info} рублей выставлен.\n"
-                    f"Номер счёта: 35077-1-{account_info}",
-                    reply_markup=main_menu()
+                    f"Номер счёта: {account_display}",
+                    reply_markup=invoice_menu(account_display)
                 )
             else:
                 await update.message.reply_text(
