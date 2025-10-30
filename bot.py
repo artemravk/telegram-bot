@@ -7,59 +7,81 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 # === Настройки ===
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = os.getenv("APP_URL")  # URL приложения на Render
+APP_URL = os.getenv("APP_URL")
 API_URL = "https://api.express-pay.by/v1/invoices"
+ACCOUNT_FILE = "account_no.txt"
+
 
 # === Главное меню ===
 def main_menu():
-    keyboard = [
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
         [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
+
+
+# === Функции для управления AccountNo ===
+def get_next_account_no():
+    today = datetime.now().strftime("%d%m%y")
+
+    if os.path.exists(ACCOUNT_FILE):
+        with open(ACCOUNT_FILE, "r") as f:
+            data = f.read().strip()
+    else:
+        data = ""
+
+    if not data.startswith(today):
+        next_no = 1
+    else:
+        last_no = int(data[6:])
+        next_no = last_no + 1
+
+    new_account_no = f"{today}{next_no:03d}"
+
+    with open(ACCOUNT_FILE, "w") as f:
+        f.write(new_account_no)
+
+    return new_account_no
+
 
 # === Команда /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
+
 
 # === Обработка нажатий кнопок ===
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "create_invoice":
-        await query.message.reply_text("Введите сумму счёта (например: 25,50):")
-        context.user_data["action"] = "create_invoice"
-    elif query.data == "check_status":
-        await query.message.reply_text("Введите номер счёта (в формате 35077-1-XXX):")
-        context.user_data["action"] = "check_status"
-    elif query.data == "main_menu":
+    if query.data == "main_menu":
         await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
-# === Счётчик AccountNo ===
-account_counter_file = "account_counter.txt"
+    elif query.data == "create_invoice":
+        await query.message.reply_text("Введите сумму счёта (например: 25,50):")
+        context.user_data["action"] = "create_invoice"
 
-def get_next_account_no():
-    if not os.path.exists(account_counter_file):
-        with open(account_counter_file, "w") as f:
-            f.write("1")
-        return 1
-    with open(account_counter_file, "r+") as f:
-        current = int(f.read().strip() or 0)
-        new = current + 1
-        f.seek(0)
-        f.write(str(new))
-        f.truncate()
-        return new
+    elif query.data == "check_status":
+        await query.message.reply_text("Введите номер счёта:")
+        context.user_data["action"] = "check_status"
+
+
+# === Получение детальной информации о счёте ===
+def get_invoice_details(invoice_no: int):
+    url = f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
 
 # === Обработка сообщений пользователя ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
     if action == "create_invoice":
-        amount = update.message.text.strip()
-        account_no = f"35077-1-{get_next_account_no()}"
-
+        amount = update.message.text.strip().replace(",", ".")
+        account_no = get_next_account_no()
         data = {
             "Token": EXPRESS_PAY_TOKEN,
             "AccountNo": account_no,
@@ -69,17 +91,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         response = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
-
         if response.status_code == 200:
             invoice_no = response.json().get("InvoiceNo")
-
-            # Получаем детальную информацию о счёте
-            detail_response = requests.get(f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}")
-            if detail_response.status_code == 200:
-                info = detail_response.json()
-                amount_info = info.get("Amount")
-                account_info = info.get("AccountNo")
-                account_display = f"35077-1-{account_info.split('-')[-1]}" if '-' in account_info else account_info
+            details = get_invoice_details(invoice_no)
+            if details:
+                amount_info = details.get("Amount")
+                account_info = details.get("AccountNo")
+                account_display = f"35077-1-{account_info}"
 
                 await update.message.reply_text(
                     f"✅ Счёт на {amount_info} рублей выставлен.\n"
@@ -89,20 +107,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await update.message.reply_text(
-                    f"❌ Ошибка при получении информации о счёте.\n{detail_response.text}"
+                    f"✅ Счёт выставлен, но не удалось получить детали.\n"
+                    f"InvoiceNo: {invoice_no}",
+                    reply_markup=main_menu()
                 )
         else:
-            await update.message.reply_text(f"❌ Ошибка при выставлении счёта:\n{response.text}")
+            await update.message.reply_text(
+                f"❌ Ошибка при выставлении счёта:\n{response.text}",
+                reply_markup=main_menu()
+            )
 
-        context.user_data.pop("action", None)
+        context.user_data.clear()
 
     elif action == "check_status":
-        account_no = update.message.text.strip()
-        response = requests.get(f"{API_URL}/by-accountno/{account_no}?token={EXPRESS_PAY_TOKEN}")
-
+        invoice_no = update.message.text.strip()
+        response = requests.get(f"{API_URL}/{invoice_no}/status?token={EXPRESS_PAY_TOKEN}")
         if response.status_code == 200:
-            data = response.json()
-            status = data.get("Status")
+            status = response.json().get("Status")
             statuses = {
                 1: "Ожидает оплату",
                 2: "Просрочен",
@@ -113,13 +134,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 7: "Платёж возвращен"
             }
             await update.message.reply_text(
-                f"📊 Статус счёта {account_no}: {statuses.get(status, 'Неизвестен')}",
+                f"📊 Статус счёта {invoice_no}: {statuses.get(status, 'Неизвестен')}",
                 reply_markup=main_menu()
             )
         else:
-            await update.message.reply_text(f"❌ Ошибка при получении статуса:\n{response.text}")
+            await update.message.reply_text(
+                f"❌ Ошибка при получении статуса:\n{response.text}",
+                reply_markup=main_menu()
+            )
 
-        context.user_data.pop("action", None)
+        context.user_data.clear()
+
+    else:
+        await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
+
 
 # === Основная функция ===
 def main():
@@ -130,12 +158,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     port = int(os.environ.get("PORT", 8443))
+
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
         url_path=BOT_TOKEN,
         webhook_url=f"{APP_URL}/{BOT_TOKEN}"
     )
+
 
 if __name__ == "__main__":
     main()
