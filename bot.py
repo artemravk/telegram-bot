@@ -1,5 +1,7 @@
 import os
 import json
+import hmac
+import hashlib
 import requests
 from datetime import datetime
 from aiohttp import web
@@ -8,6 +10,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 
 # === Настройки ===
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
+EXPRESS_PAY_SECRET_WORD = os.getenv("EXPRESS_PAY_SECRET_WORD", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # твой Telegram ID для уведомлений
@@ -183,13 +186,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
+# === Проверка цифровой подписи ===
+def verify_signature(data: str, received_signature: str, secret_word: str) -> bool:
+    """Проверяет подлинность уведомления от ExpressPay."""
+    if not secret_word:
+        return True  # если не задан секрет, пропускаем проверку
+
+    digest = hmac.new(
+        secret_word.encode("utf-8"),
+        msg=data.encode("utf-8"),
+        digestmod=hashlib.sha1
+    ).hexdigest().upper()
+
+    return digest == received_signature.upper()
+
+
 # === Приём уведомлений ExpressPay ===
 async def handle_payment_notification(request: web.Request):
     try:
-        data = await request.post()
-        payload = data.get("Data")
+        post_data = await request.post()
+        payload = post_data.get("Data")
+        signature = post_data.get("Signature")
+
         if not payload:
-            return web.Response(status=400, text="No Data field")
+            return web.Response(status=400, text="Missing Data")
+
+        # Проверяем подпись
+        if not verify_signature(payload, signature or "", EXPRESS_PAY_SECRET_WORD):
+            print("❌ Неверная подпись ExpressPay!")
+            return web.Response(status=403, text="Invalid signature")
 
         payment_info = json.loads(payload)
 
@@ -206,6 +231,7 @@ async def handle_payment_notification(request: web.Request):
             await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg, parse_mode="Markdown")
 
         return web.Response(status=200, text="OK")
+
     except Exception as e:
         print("Ошибка при обработке уведомления:", e)
         return web.Response(status=500, text="Internal Error")
