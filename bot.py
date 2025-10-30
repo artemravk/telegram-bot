@@ -126,7 +126,6 @@ if not APP_URL:
     logger.warning("⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Используется временный URL-заглушка.")
     APP_URL = "https://example.com"
 
-
 # Render может подставить RENDER_EXTERNAL_URL чуть позже, поэтому делаем fallback
 if not APP_URL:
     logger.warning("⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Используется временный URL-заглушка.")
