@@ -1,145 +1,222 @@
 import os
-import hmac
-import hashlib
-import json
-import asyncio
-import logging
+import requests
 from datetime import datetime
-from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# === ЛОГИРОВАНИЕ ===
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# === Настройки ===
+EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+APP_URL = os.getenv("APP_URL")
+API_URL = "https://api.express-pay.by/v1/invoices"
+ACCOUNT_FILE = "account_no.txt"
 
-# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-EXPRESSPAY_TOKEN = os.environ.get("EXPRESSPAY_TOKEN")
-EXPRESSPAY_SECRET = os.environ.get("EXPRESSPAY_SECRET")
-APP_URL = os.environ.get("APP_URL")
 
-if not BOT_TOKEN or not EXPRESSPAY_TOKEN:
-    raise ValueError("❌ Проверьте, что заданы BOT_TOKEN и EXPRESSPAY_TOKEN")
+# === Главное меню ===
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
+        [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
+    ])
 
-# === СТАРТ ===
+
+# === Функции для управления AccountNo ===
+def get_next_account_no():
+    today = datetime.now().strftime("%d%m%y")
+
+    if os.path.exists(ACCOUNT_FILE):
+        with open(ACCOUNT_FILE, "r") as f:
+            data = f.read().strip()
+    else:
+        data = ""
+
+    if not data.startswith(today):
+        next_no = 1
+    else:
+        last_no = int(data[6:])
+        next_no = last_no + 1
+
+    new_account_no = f"{today}{next_no:03d}"
+
+    with open(ACCOUNT_FILE, "w") as f:
+        f.write(new_account_no)
+
+    return new_account_no
+
+
+# === Команда /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("💰 Статус счёта", callback_data="status")],
-        [InlineKeyboardButton("📄 Инструкция", callback_data="help")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Выберите действие:", reply_markup=reply_markup)
+    await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
-# === КНОПКИ ===
+
+# === Обработка кнопок ===
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "status":
-        invoice_number = "123456"
-        issue_date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        text = f"📄 Номер счёта: {invoice_number}\n🗓 Дата выставления: {issue_date}"
-        await query.edit_message_text(text)
-    elif query.data == "help":
-        await query.edit_message_text("ℹ️ Чтобы проверить статус счёта, нажмите 'Статус счёта'.")
+    if query.data == "main_menu":
+        await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
-# === ОБРАБОТКА СООБЩЕНИЙ ===
+    elif query.data == "create_invoice":
+        await query.message.reply_text("Введите сумму счёта (например: 25,50):")
+        context.user_data["action"] = "create_invoice"
+
+    elif query.data == "check_status":
+        await query.message.reply_text("Введите номер счёта:")
+        context.user_data["action"] = "check_status"
+
+
+# === Получение деталей счёта ===
+def get_invoice_details(invoice_no: int):
+    url = f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+
+# === Получение списка счетов по AccountNo ===
+def get_invoice_list(token: str, account_no: str):
+    """Получает список счетов по AccountNo (без подписи, без параметра From)."""
+    params = {
+        "Token": token,
+        "AccountNo": account_no
+    }
+
+    response = requests.get(API_URL, params=params)
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
+
+    return data
+
+
+# === Обработка сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    if "счет" in text or "инвойс" in text:
-        await update.message.reply_text("Проверяю статус счёта...")
+    action = context.user_data.get("action")
+
+    if action == "create_invoice":
+        amount = update.message.text.strip().replace(",", ".")
+        account_no = get_next_account_no()
+
+        data = {
+            "Token": EXPRESS_PAY_TOKEN,
+            "AccountNo": account_no,
+            "Amount": amount,
+            "Currency": 933,
+            "Info": "организация доставки"
+        }
+
+        response = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
+        if response.status_code == 200:
+            invoice_no = response.json().get("InvoiceNo")
+            details = get_invoice_details(invoice_no)
+            if details:
+                amount_info = details.get("Amount")
+                account_info = details.get("AccountNo")
+                account_display = f"35077-1-{account_info}"
+
+                await update.message.reply_text(
+                    f"✅ Счёт на {amount_info} рублей выставлен.\n"
+                    f"Номер счёта: `{account_display}`",
+                    parse_mode="Markdown",
+                    reply_markup=main_menu()
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ Счёт выставлен, но не удалось получить детали.\n"
+                    f"InvoiceNo: {invoice_no}",
+                    reply_markup=main_menu()
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка при выставлении счёта:\n{response.text}",
+                reply_markup=main_menu()
+            )
+
+        context.user_data.clear()
+
+    elif action == "check_status":
+        account_display = update.message.text.strip()
+
+        if "-" in account_display:
+            account_no = account_display.split("-")[-1].strip()
+        else:
+            account_no = account_display.strip()
+
+        data = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
+
+        if "Error" in data:
+            await update.message.reply_text(
+                f"❌ Ошибка от ExpressPay:\n{data['Error']['Msg']}",
+                reply_markup=main_menu()
+            )
+            return
+
+        items = data.get("Items", [])
+        if not items:
+            await update.message.reply_text(
+                f"❌ Счёт `{account_display}` не найден.",
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+            return
+
+        # Берём последний счёт из списка
+        invoice = items[-1]
+        status = int(invoice.get("Status", 0))
+        amount = invoice.get("Amount", "—")
+        created_raw = invoice.get("Created", "")
+        date = (
+            datetime.strptime(created_raw, "%Y%m%d%H%M%S").strftime("%d.%m.%Y %H:%M")
+            if created_raw else "—"
+        )
+
+        statuses = {
+            1: "Ожидает оплату",
+            2: "Просрочен",
+            3: "Оплачен",
+            4: "Оплачен частично",
+            5: "Отменен",
+            6: "Оплачен картой",
+            7: "Платёж возвращен"
+        }
+
+        await update.message.reply_text(
+            f"📊 *Статус счёта*\n\n"
+            f"Номер: `{account_display}`\n"
+            f"Статус: *{statuses.get(status, 'Неизвестен')}*\n"
+            f"Сумма: {amount} BYN\n"
+            f"Дата выставления: {date}",
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+
+        context.user_data.clear()
+
     else:
-        await update.message.reply_text("Я вас не понял. Напишите 'счёт' чтобы проверить статус.")
+        await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
-# === ВЕБХУК EXPRESSPAY ===
-async def expresspay_notify(request):
-    try:
-        body = await request.text()
-        logger.info(f"📩 ExpressPay уведомление: {body}")
 
-        # Проверка подписи
-        if EXPRESSPAY_SECRET:
-            signature = request.headers.get("Signature", "")
-            expected_sig = hmac.new(
-                EXPRESSPAY_SECRET.encode(), body.encode(), hashlib.sha1
-            ).hexdigest()
-            if signature != expected_sig:
-                logger.warning("❌ Неверная подпись уведомления ExpressPay")
-                return web.Response(status=403, text="Invalid signature")
+# === Запуск ===
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
 
-        data = json.loads(body)
-        logger.info(f"✅ Уведомление от ExpressPay обработано: {data}")
-        return web.Response(status=200, text="OK")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    except Exception as e:
-        logger.error(f"Ошибка обработки ExpressPay уведомления: {e}")
-        return web.Response(status=500, text="Internal server error")
+    port = int(os.environ.get("PORT", 8443))
 
-# === ВЕБХУК TELEGRAM ===
-async def telegram_webhook(request):
-    try:
-        data = await request.json()
-        update = Update.de_json(data, request.app["bot"])
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+    )
 
-        # Инициализация приложения перед обработкой апдейта
-        app = request.app["application"]
-        if not app._initialized:
-            await app.initialize()
-
-        await app.process_update(update)
-        return web.Response(text="OK")
-
-    except Exception as e:
-        logger.exception(f"Ошибка в telegram_webhook: {e}")
-        return web.Response(status=500, text="Internal Server Error")
-
-# === ОСНОВНОЙ ЗАПУСК ===
-async def main():
-    print("🔍 Проверка переменных окружения:")
-    print(f"BOT_TOKEN: {'✅ найден' if BOT_TOKEN else '❌ отсутствует'}")
-    print(f"EXPRESSPAY_TOKEN: {'✅ найден' if EXPRESSPAY_TOKEN else '❌ отсутствует'}")
-    print(f"EXPRESSPAY_SECRET: {'✅ найден' if EXPRESSPAY_SECRET else '⚠️ отсутствует'}")
-    print(f"APP_URL: {APP_URL}")
-
-    # Инициализация Telegram Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # === aiohttp сервер ===
-    web_app = web.Application()
-    web_app["bot"] = application.bot
-    web_app["application"] = application
-
-    # Роуты
-    web_app.router.add_post(f"/{BOT_TOKEN}", telegram_webhook)
-    web_app.router.add_post("/expresspay_notify", expresspay_notify)
-
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-    # === Установка вебхука Telegram ===
-    if APP_URL:
-        webhook_url = f"{APP_URL}/{BOT_TOKEN}"
-        await application.bot.set_webhook(webhook_url)
-        print(f"✅ Webhook Telegram установлен: {webhook_url}")
-    else:
-        print("⚠️ APP_URL не задан, Telegram webhook не установлен")
-
-    print(f"🚀 Сервер запущен на порту {port}")
-    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
