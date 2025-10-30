@@ -196,7 +196,8 @@ def main():
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 10000)),
         url_path=BOT_TOKEN,
-        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_URL', 'yourapp.onrender.com')}/{BOT_TOKEN}",
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}",
+
     )
 
     web.run_app(web_app, host="0.0.0.0", port=8080)
