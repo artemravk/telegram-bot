@@ -22,7 +22,9 @@ def main_menu():
 
 # === Функции для управления AccountNo ===
 def get_next_account_no():
-    today = datetime.now().strftime("%d%m%y")
+    """Генерирует уникальный номер счёта на основе текущей даты и времени."""
+    return datetime.now().strftime("%d%m%y%H%M%S")
+
 
     if os.path.exists(ACCOUNT_FILE):
         with open(ACCOUNT_FILE, "r") as f:
