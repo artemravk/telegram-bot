@@ -18,12 +18,17 @@ from aiohttp import web
 
 # === НАСТРОЙКИ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-EXPRESSPAY_TOKEN = os.getenv("EXPRESSPAY_TOKEN")
-EXPRESSPAY_SECRET = os.getenv("EXPRESSPAY_SECRET", "")
-EXPRESSPAY_URL = "https://api.express-pay.by/v1/invoices"
+EXPRESS_PAY_TOKEN = os.getenv("EXPRESSPAY_TOKEN")
+APP_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-if not BOT_TOKEN or not EXPRESSPAY_TOKEN:
+print("🔍 Проверка переменных окружения:")
+print("BOT_TOKEN:", "✅ найден" if BOT_TOKEN else "❌ отсутствует")
+print("EXPRESSPAY_TOKEN:", "✅ найден" if EXPRESS_PAY_TOKEN else "❌ отсутствует")
+print("RENDER_EXTERNAL_URL:", os.getenv("RENDER_EXTERNAL_URL") or "❌ отсутствует")
+
+if not BOT_TOKEN or not EXPRESS_PAY_TOKEN:
     raise ValueError("❌ Проверьте, что заданы BOT_TOKEN и EXPRESSPAY_TOKEN")
+
 
 # === ЛОГИ ===
 logging.basicConfig(level=logging.INFO)
