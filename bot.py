@@ -36,12 +36,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["action"] = "check_status"
 
 
+# === Функция для получения детальной информации о счёте ===
+def get_invoice_details(invoice_no: int):
+    """Возвращает детальную информацию по счёту из ExpressPay."""
+    url = f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+
 # === Обработка сообщений пользователя ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
     if action == "create_invoice":
-        amount = update.message.text.strip()
+        amount = update.message.text.strip().replace(",", ".")
         today = datetime.now().strftime("%d%m%y")
         account_no = f"{today}001"
         data = {
@@ -52,10 +62,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Info": "организация доставки"
         }
 
+        # Создаём счёт
         response = requests.post(f"{API_URL}?token={EXPRESS_PAY_TOKEN}", data=data)
         if response.status_code == 200:
             invoice_no = response.json().get("InvoiceNo")
-            await update.message.reply_text(f"✅ Счёт выставлен!\nНомер счёта: {invoice_no}")
+
+            # Получаем детальную информацию по счёту
+            details = get_invoice_details(invoice_no)
+            if details:
+                amount_info = details.get("Amount")
+                account_info = details.get("AccountNo")
+                await update.message.reply_text(
+                    f"✅ Счёт на {amount_info} рублей выставлен.\n"
+                    f"Номер счёта: 35077-1-{account_info}"
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ Счёт выставлен, но не удалось получить детали.\n"
+                    f"InvoiceNo: {invoice_no}"
+                )
         else:
             await update.message.reply_text(f"❌ Ошибка при выставлении счёта:\n{response.text}")
 
