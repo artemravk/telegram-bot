@@ -116,8 +116,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------- MAIN ---------------------
 
 def main():
-    if not BOT_TOKEN or not API_TOKEN or not APP_URL:
-        raise ValueError("❌ Проверьте переменные окружения BOT_TOKEN, EXPRESSPAY_TOKEN и RENDER_EXTERNAL_URL")
+    if not BOT_TOKEN or not API_TOKEN:
+    raise ValueError("❌ Проверьте, что заданы BOT_TOKEN и EXPRESSPAY_TOKEN")
+
+# Render может подставить RENDER_EXTERNAL_URL чуть позже, поэтому делаем fallback
+if not APP_URL:
+    logger.warning("⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Используется временный URL-заглушка.")
+    APP_URL = "https://example.com"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
