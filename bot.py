@@ -22,7 +22,6 @@ def main_menu():
 
 # === Функции для управления AccountNo ===
 def get_next_account_no():
-    """Генерирует следующий AccountNo (например, 301025001, 301025002 и т.д.)"""
     today = datetime.now().strftime("%d%m%y")
 
     if os.path.exists(ACCOUNT_FILE):
@@ -50,7 +49,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
-# === Обработка нажатий кнопок ===
+# === Обработка кнопок ===
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -67,9 +66,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["action"] = "check_status"
 
 
-# === Получение детальной информации о счёте ===
+# === Получение деталей счёта ===
 def get_invoice_details(invoice_no: int):
-    """Возвращает подробную информацию по номеру счёта (InvoiceNo)."""
     url = f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}"
     response = requests.get(url)
     if response.status_code == 200:
@@ -80,7 +78,7 @@ def get_invoice_details(invoice_no: int):
 # === Получение списка счетов по AccountNo ===
 def get_invoice_list(token: str, account_no: str):
     """Получает список счетов по AccountNo (без подписи)."""
-    from_date = (datetime.now() - timedelta(days=60)).strftime("%d.%m.%Y")
+    from_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")  # ✅ исправлено
     url = f"{API_URL}?Token={token}&AccountNo={account_no}&From={from_date}"
 
     response = requests.get(url)
@@ -94,12 +92,11 @@ def get_invoice_list(token: str, account_no: str):
     return data, raw_text
 
 
-# === Обработка сообщений пользователя ===
+# === Обработка сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
     if action == "create_invoice":
-        # Создание счёта
         amount = update.message.text.strip().replace(",", ".")
         account_no = get_next_account_no()
 
@@ -141,10 +138,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
     elif action == "check_status":
-        # Проверка статуса счёта
         account_display = update.message.text.strip()
 
-        # Извлекаем чистый AccountNo из формата 35077-1-301025001
         if "-" in account_display:
             account_no = account_display.split("-")[-1].strip()
         else:
@@ -152,23 +147,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data, raw = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
 
-        # 👇 Отправляем сырое тело ответа для диагностики
         await update.message.reply_text(
             f"🧾 *Ответ ExpressPay (сырой)*:\n```\n{raw[:3000]}\n```",
             parse_mode="Markdown"
         )
 
-        # Проверяем, что пришло от API
-        if not isinstance(data, dict):
+        if "Error" in data:
             await update.message.reply_text(
-                f"❌ Некорректный ответ от ExpressPay:\n{data}",
-                reply_markup=main_menu()
-            )
-            return
-
-        if "error" in data:
-            await update.message.reply_text(
-                f"❌ Ошибка при получении статуса:\n{data['error']}",
+                f"❌ Ошибка от ExpressPay:\n{data['Error']['Msg']}",
                 reply_markup=main_menu()
             )
             return
@@ -176,7 +162,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invoices = data.get("Invoices") or data
         if not invoices or (isinstance(invoices, list) and len(invoices) == 0):
             await update.message.reply_text(
-                f"❌ Счёт `{account_display}` не найден в системе ExpressPay.",
+                f"❌ Счёт `{account_display}` не найден.",
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
@@ -213,7 +199,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
-# === Основная функция ===
+# === Запуск ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -223,7 +209,6 @@ def main():
 
     port = int(os.environ.get("PORT", 8443))
 
-    # Запуск webhook
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
