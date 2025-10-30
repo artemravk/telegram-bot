@@ -84,14 +84,13 @@ def get_invoice_list(token: str, account_no: str):
     }
 
     response = requests.get(API_URL, params=params)
-    raw_text = response.text  # Сырой ответ API
 
     try:
         data = response.json()
     except Exception:
-        data = {"error": f"Некорректный JSON: {raw_text}"}
+        data = {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
 
-    return data, raw_text
+    return data
 
 
 # === Обработка сообщений ===
@@ -147,13 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             account_no = account_display.strip()
 
-        data, raw = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
-
-        # 🔍 Показываем сырой ответ для отладки
-        await update.message.reply_text(
-            f"🧾 *Ответ ExpressPay (сырой)*:\n```\n{raw[:3000]}\n```",
-            parse_mode="Markdown"
-        )
+        data = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
 
         if "Error" in data:
             await update.message.reply_text(
@@ -171,7 +164,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Берём самый последний счёт
+        # Берём последний счёт из списка
         invoice = items[-1]
         status = int(invoice.get("Status", 0))
         amount = invoice.get("Amount", "—")
