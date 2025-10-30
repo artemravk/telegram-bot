@@ -62,7 +62,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["action"] = "create_invoice"
 
     elif query.data == "check_status":
-        await query.message.reply_text("Введите номер счёта:")
+        await query.message.reply_text("Введите номер счёта (например: 35077-1-123):")
         context.user_data["action"] = "check_status"
 
 
@@ -79,6 +79,7 @@ def get_invoice_details(invoice_no: int):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
+    # === ВЫСТАВЛЕНИЕ СЧЁТА ===
     if action == "create_invoice":
         amount = update.message.text.strip().replace(",", ".")
         account_no = get_next_account_no()
@@ -110,62 +111,3 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ Счёт выставлен, но не удалось получить детали.\n"
                     f"InvoiceNo: {invoice_no}",
                     reply_markup=main_menu()
-                )
-        else:
-            await update.message.reply_text(
-                f"❌ Ошибка при выставлении счёта:\n{response.text}",
-                reply_markup=main_menu()
-            )
-
-        context.user_data.clear()
-
-    elif action == "check_status":
-        invoice_no = update.message.text.strip()
-        response = requests.get(f"{API_URL}/{invoice_no}/status?token={EXPRESS_PAY_TOKEN}")
-        if response.status_code == 200:
-            status = response.json().get("Status")
-            statuses = {
-                1: "Ожидает оплату",
-                2: "Просрочен",
-                3: "Оплачен",
-                4: "Оплачен частично",
-                5: "Отменен",
-                6: "Оплачен картой",
-                7: "Платёж возвращен"
-            }
-            await update.message.reply_text(
-                f"📊 Статус счёта {invoice_no}: {statuses.get(status, 'Неизвестен')}",
-                reply_markup=main_menu()
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Ошибка при получении статуса:\n{response.text}",
-                reply_markup=main_menu()
-            )
-
-        context.user_data.clear()
-
-    else:
-        await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
-
-
-# === Основная функция ===
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    port = int(os.environ.get("PORT", 8443))
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
-    )
-
-
-if __name__ == "__main__":
-    main()
