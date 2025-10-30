@@ -149,6 +149,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data, raw = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
 
+        # 🔍 Показываем сырой ответ для отладки
         await update.message.reply_text(
             f"🧾 *Ответ ExpressPay (сырой)*:\n```\n{raw[:3000]}\n```",
             parse_mode="Markdown"
@@ -161,8 +162,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        invoices = data.get("Invoices") or data
-        if not invoices or (isinstance(invoices, list) and len(invoices) == 0):
+        items = data.get("Items", [])
+        if not items:
             await update.message.reply_text(
                 f"❌ Счёт `{account_display}` не найден.",
                 parse_mode="Markdown",
@@ -170,10 +171,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        invoice = invoices[0] if isinstance(invoices, list) else invoices
+        # Берём самый последний счёт
+        invoice = items[-1]
         status = int(invoice.get("Status", 0))
         amount = invoice.get("Amount", "—")
-        date = invoice.get("DateCreated", "—")
+        created_raw = invoice.get("Created", "")
+        date = (
+            datetime.strptime(created_raw, "%Y%m%d%H%M%S").strftime("%d.%m.%Y %H:%M")
+            if created_raw else "—"
+        )
 
         statuses = {
             1: "Ожидает оплату",
