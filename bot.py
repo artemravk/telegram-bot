@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -77,11 +77,13 @@ def get_invoice_details(invoice_no: int):
 
 # === Получение списка счетов по AccountNo ===
 def get_invoice_list(token: str, account_no: str):
-    """Получает список счетов по AccountNo (без подписи)."""
-    from_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")  # ✅ исправлено
-    url = f"{API_URL}?Token={token}&AccountNo={account_no}&From={from_date}"
+    """Получает список счетов по AccountNo (без подписи, без параметра From)."""
+    params = {
+        "Token": token,
+        "AccountNo": account_no
+    }
 
-    response = requests.get(url)
+    response = requests.get(API_URL, params=params)
     raw_text = response.text  # Сырой ответ API
 
     try:
