@@ -1,6 +1,8 @@
 import os
+import json
 import requests
 from datetime import datetime
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -8,9 +10,9 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # твой Telegram ID для уведомлений
 API_URL = "https://api.express-pay.by/v1/invoices"
 ACCOUNT_FILE = "account_no.txt"
-
 
 # === Главное меню ===
 def main_menu():
@@ -20,10 +22,9 @@ def main_menu():
     ])
 
 
-# === Функции для управления AccountNo ===
+# === Управление AccountNo ===
 def get_next_account_no():
     today = datetime.now().strftime("%d%m%y")
-
     if os.path.exists(ACCOUNT_FILE):
         with open(ACCOUNT_FILE, "r") as f:
             data = f.read().strip()
@@ -37,36 +38,30 @@ def get_next_account_no():
         next_no = last_no + 1
 
     new_account_no = f"{today}{next_no:03d}"
-
     with open(ACCOUNT_FILE, "w") as f:
         f.write(new_account_no)
-
     return new_account_no
 
 
-# === Команда /start ===
+# === Telegram команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
-# === Обработка кнопок ===
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "main_menu":
         await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
-
     elif query.data == "create_invoice":
         await query.message.reply_text("Введите сумму счёта (например: 25,50):")
         context.user_data["action"] = "create_invoice"
-
     elif query.data == "check_status":
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
 
 
-# === Получение деталей счёта ===
 def get_invoice_details(invoice_no: int):
     url = f"{API_URL}/{invoice_no}?token={EXPRESS_PAY_TOKEN}"
     response = requests.get(url)
@@ -75,25 +70,15 @@ def get_invoice_details(invoice_no: int):
     return None
 
 
-# === Получение списка счетов по AccountNo ===
 def get_invoice_list(token: str, account_no: str):
-    """Получает список счетов по AccountNo (без подписи, без параметра From)."""
-    params = {
-        "Token": token,
-        "AccountNo": account_no
-    }
-
+    params = {"Token": token, "AccountNo": account_no}
     response = requests.get(API_URL, params=params)
-
     try:
-        data = response.json()
-    except Exception:
-        data = {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
-
-    return data
+        return response.json()
+    except:
+        return {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
 
 
-# === Обработка сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = context.user_data.get("action")
 
@@ -140,7 +125,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "check_status":
         account_display = update.message.text.strip()
-
         if "-" in account_display:
             account_no = account_display.split("-")[-1].strip()
         else:
@@ -164,7 +148,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Берём последний счёт из списка
         invoice = items[-1]
         status = int(invoice.get("Status", 0))
         amount = invoice.get("Amount", "—")
@@ -200,21 +183,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
-# === Запуск ===
+# === Приём уведомлений ExpressPay ===
+async def handle_payment_notification(request: web.Request):
+    try:
+        data = await request.post()
+        payload = data.get("Data")
+        if not payload:
+            return web.Response(status=400, text="No Data field")
+
+        payment_info = json.loads(payload)
+
+        msg = (
+            f"💸 *Поступил платёж!*\n\n"
+            f"Номер счёта: `{payment_info.get('AccountNumber', '—')}`\n"
+            f"Сумма: {payment_info.get('Amount', '—')} BYN\n"
+            f"Дата: {payment_info.get('DateResultUtc', '—')}"
+        )
+
+        # Отправляем уведомление админу
+        if ADMIN_CHAT_ID:
+            app = request.app["bot_app"]
+            await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg, parse_mode="Markdown")
+
+        return web.Response(status=200, text="OK")
+    except Exception as e:
+        print("Ошибка при обработке уведомления:", e)
+        return web.Response(status=500, text="Internal Error")
+
+
+# === Основная функция ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Telegram handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    port = int(os.environ.get("PORT", 8443))
+    # Webhook сервер
+    async def on_startup(app_):
+        app_["bot_app"] = app
 
+    web_app = web.Application()
+    web_app.add_routes([
+        web.post("/payment_notification", handle_payment_notification)
+    ])
+    web_app.on_startup.append(on_startup)
+
+    port = int(os.environ.get("PORT", 8443))
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
         url_path=BOT_TOKEN,
-        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}",
+        web_app=web_app
     )
 
 
