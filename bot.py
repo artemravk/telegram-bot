@@ -12,19 +12,11 @@ API_URL = "https://api.express-pay.by/v1/invoices"
 ACCOUNT_FILE = "account_no.txt"
 
 
-# === Клавиатура ===
+# === Главное меню ===
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
         [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
-    ])
-
-
-# === Клавиатура с кнопкой копирования ===
-def invoice_menu(account_display):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Копировать номер счёта", callback_data=f"copy_{account_display}")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
     ])
 
 
@@ -62,7 +54,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Главное меню
     if query.data == "main_menu":
         await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
@@ -73,12 +64,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "check_status":
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
-
-    elif query.data.startswith("copy_"):
-        account_display = query.data.replace("copy_", "")
-        await query.message.reply_text(f"📋 Номер счёта: `{account_display}`", parse_mode="Markdown")
-
-        await query.message.reply_text("Выберите действие:", reply_markup=main_menu())
 
 
 # === Получение детальной информации о счёте ===
@@ -116,8 +101,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_text(
                     f"✅ Счёт на {amount_info} рублей выставлен.\n"
-                    f"Номер счёта: {account_display}",
-                    reply_markup=invoice_menu(account_display)
+                    f"Номер счёта: `{account_display}`",
+                    parse_mode="Markdown",
+                    reply_markup=main_menu()
                 )
             else:
                 await update.message.reply_text(
