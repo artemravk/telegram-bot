@@ -84,15 +84,14 @@ def get_invoice_list(token: str, account_no: str):
     url = f"{API_URL}?Token={token}&AccountNo={account_no}&From={from_date}"
 
     response = requests.get(url)
+    raw_text = response.text  # Сырой ответ API
+
     try:
         data = response.json()
     except Exception:
-        return {"error": f"Некорректный ответ API: {response.text}"}
+        data = {"error": f"Некорректный JSON: {raw_text}"}
 
-    if response.status_code != 200:
-        return {"error": f"{response.status_code}: {response.text}"}
-
-    return data
+    return data, raw_text
 
 
 # === Обработка сообщений пользователя ===
@@ -151,14 +150,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             account_no = account_display.strip()
 
-        data = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
+        data, raw = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
+
+        # 👇 Отправляем сырое тело ответа для диагностики
+        await update.message.reply_text(
+            f"🧾 *Ответ ExpressPay (сырой)*:\n```\n{raw[:3000]}\n```",
+            parse_mode="Markdown"
+        )
+
+        # Проверяем, что пришло от API
+        if not isinstance(data, dict):
+            await update.message.reply_text(
+                f"❌ Некорректный ответ от ExpressPay:\n{data}",
+                reply_markup=main_menu()
+            )
+            return
 
         if "error" in data:
             await update.message.reply_text(
                 f"❌ Ошибка при получении статуса:\n{data['error']}",
                 reply_markup=main_menu()
             )
-            context.user_data.clear()
             return
 
         invoices = data.get("Invoices") or data
@@ -168,7 +180,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
-            context.user_data.clear()
             return
 
         invoice = invoices[0] if isinstance(invoices, list) else invoices
