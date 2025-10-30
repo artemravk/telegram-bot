@@ -181,18 +181,32 @@ def main():
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Aiohttp сервер для уведомлений ExpressPay
+    # === Создаём aiohttp web app ===
     web_app = web.Application()
-    web_app.router.add_post("/expresspay_notify", expresspay_notify)
+    web_app.router.add_post(f"/{BOT_TOKEN}", app.webhook_handler())  # Webhook Telegram
+    web_app.router.add_post("/expresspay_notify", expresspay_notify)  # Webhook ExpressPay
 
-    # Запуск Telegram webhook
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        url_path=BOT_TOKEN,
-        webhook_url=f"{APP_URL}/{BOT_TOKEN}",
-        web_app=web_app,
-    )
+    # === Запускаем aiohttp сервер ===
+    runner = web.AppRunner(web_app)
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(runner.setup())
+
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    asyncio.get_event_loop().run_until_complete(site.start())
+
+    # === Настраиваем Telegram webhook ===
+    if APP_URL:
+        webhook_url = f"{APP_URL}/{BOT_TOKEN}"
+        app.bot.set_webhook(webhook_url)
+        print(f"✅ Webhook Telegram установлен: {webhook_url}")
+    else:
+        print("⚠️ APP_URL не задан, Telegram webhook не установлен")
+
+    print(f"🚀 Сервер запущен на порту {port}")
+    asyncio.get_event_loop().run_forever()
+
 
 if __name__ == "__main__":
     main()
+
