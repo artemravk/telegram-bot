@@ -45,7 +45,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "status":
         invoice_number = "123456"
-        issue_date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")  # исправлено
+        issue_date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         text = f"📄 Номер счёта: {invoice_number}\n🗓 Дата выставления: {issue_date}"
         await query.edit_message_text(text)
     elif query.data == "help":
@@ -56,7 +56,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
     if "счет" in text or "инвойс" in text:
         await update.message.reply_text("Проверяю статус счёта...")
-        # Здесь можно добавить реальный запрос к ExpressPay API
     else:
         await update.message.reply_text("Я вас не понял. Напишите 'счёт' чтобы проверить статус.")
 
@@ -89,10 +88,17 @@ async def telegram_webhook(request):
     try:
         data = await request.json()
         update = Update.de_json(data, request.app["bot"])
-        await request.app["application"].process_update(update)
+
+        # Инициализация приложения перед обработкой апдейта
+        app = request.app["application"]
+        if not app._initialized:
+            await app.initialize()
+
+        await app.process_update(update)
         return web.Response(text="OK")
+
     except Exception as e:
-        logger.error(f"Ошибка в telegram_webhook: {e}")
+        logger.exception(f"Ошибка в telegram_webhook: {e}")
         return web.Response(status=500, text="Internal Server Error")
 
 # === ОСНОВНОЙ ЗАПУСК ===
@@ -103,16 +109,18 @@ async def main():
     print(f"EXPRESSPAY_SECRET: {'✅ найден' if EXPRESSPAY_SECRET else '⚠️ отсутствует'}")
     print(f"APP_URL: {APP_URL}")
 
+    # Инициализация Telegram Application
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # aiohttp приложение
+    # === aiohttp сервер ===
     web_app = web.Application()
     web_app["bot"] = application.bot
     web_app["application"] = application
 
+    # Роуты
     web_app.router.add_post(f"/{BOT_TOKEN}", telegram_webhook)
     web_app.router.add_post("/expresspay_notify", expresspay_notify)
 
@@ -122,7 +130,7 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    # Установка вебхука Telegram
+    # === Установка вебхука Telegram ===
     if APP_URL:
         webhook_url = f"{APP_URL}/{BOT_TOKEN}"
         await application.bot.set_webhook(webhook_url)
