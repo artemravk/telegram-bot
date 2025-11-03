@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
-API_URL = "https://api.express-pay.by/v1/invoices"
+API_URL = "https://api.express-pay.by/v1/invoices"  # Используем тот же базовый API
 ACCOUNT_FILE = "account_no.txt"
 
 
@@ -16,7 +16,8 @@ ACCOUNT_FILE = "account_no.txt"
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
-        [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")]
+        [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")],
+        [InlineKeyboardButton("📅 Получить список оплат", callback_data="get_payments")]  # ✅ новая кнопка
     ])
 
 
@@ -26,24 +27,41 @@ def get_next_account_no():
     return datetime.now().strftime("%d%m%y%H%M%S")
 
 
-    if os.path.exists(ACCOUNT_FILE):
-        with open(ACCOUNT_FILE, "r") as f:
-            data = f.read().strip()
-    else:
-        data = ""
+# === Получение суммы оплат ===
+def get_payments_sum(token: str, date_from: str = None, date_to: str = None):
+    """
+    Возвращает общую сумму оплат за указанный период.
+    Если даты не заданы — берётся предыдущий день.
+    """
+    if not date_from or not date_to:
+        yesterday = datetime.now() - timedelta(days=1)
+        date_from = yesterday.strftime("%Y%m%d")
+        date_to = yesterday.strftime("%Y%m%d")
 
-    if not data.startswith(today):
-        next_no = 1
-    else:
-        last_no = int(data[6:])
-        next_no = last_no + 1
+    url = "https://api.express-pay.by/v1/payments"  # ✅ используем напрямую, без новой переменной
+    params = {
+        "token": token,
+        "From": date_from,
+        "To": date_to
+    }
 
-    new_account_no = f"{today}{next_no:03d}"
+    response = requests.get(url, params=params)
 
-    with open(ACCOUNT_FILE, "w") as f:
-        f.write(new_account_no)
+    if response.status_code != 200:
+        return None, f"Ошибка {response.status_code}: {response.text}"
 
-    return new_account_no
+    try:
+        data = response.json()
+    except Exception:
+        return None, "Некорректный ответ от ExpressPay (не JSON)."
+
+    if "Error" in data:
+        return None, data["Error"].get("Msg", "Неизвестная ошибка")
+
+    items = data.get("Items", [])
+    total_amount = sum(float(item.get("Amount", 0)) for item in items)
+
+    return total_amount, None
 
 
 # === Команда /start ===
@@ -66,6 +84,19 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "check_status":
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
+
+    elif query.data == "get_payments":  # ✅ новая функция
+        await query.message.reply_text("⏳ Получаю данные об оплатах за вчера...")
+
+        total, error = get_payments_sum(EXPRESS_PAY_TOKEN)
+        if error:
+            await query.message.reply_text(f"❌ Ошибка: {error}", reply_markup=main_menu())
+        else:
+            await query.message.reply_text(
+                f"📅 Общая сумма оплат за вчера: *{total:.2f} BYN*",
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
 
 
 # === Получение деталей счёта ===
