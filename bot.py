@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 EXPRESS_PAY_TOKEN = os.getenv("EXPRESS_PAY_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
-API_URL = "https://api.express-pay.by/v1/invoices"  # Используем тот же базовый API
+API_URL = "https://api.express-pay.by/v1/invoices"
 ACCOUNT_FILE = "account_no.txt"
 
 
@@ -17,28 +17,23 @@ def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Выставить счёт", callback_data="create_invoice")],
         [InlineKeyboardButton("📊 Статус счёта", callback_data="check_status")],
-        [InlineKeyboardButton("📅 Получить список оплат", callback_data="get_payments")]  # ✅ новая кнопка
+        [InlineKeyboardButton("📅 Получить сумму оплат", callback_data="get_payments_menu")]  # ✅ новое название
     ])
 
 
-# === Функции для управления AccountNo ===
-def get_next_account_no():
-    """Генерирует уникальный номер счёта на основе текущей даты и времени."""
-    return datetime.now().strftime("%d%m%y%H%M%S")
+# === Подменю выбора периода оплат ===
+def payments_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📆 За сегодня", callback_data="payments_today")],
+        [InlineKeyboardButton("📅 За вчера", callback_data="payments_yesterday")],
+        [InlineKeyboardButton("🗓 За последние 3 дня", callback_data="payments_last3")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="main_menu")]
+    ])
 
 
 # === Получение суммы оплат ===
-def get_payments_sum(token: str, date_from: str = None, date_to: str = None):
-    """
-    Возвращает общую сумму оплат за указанный период.
-    Если даты не заданы — берётся предыдущий день.
-    """
-    if not date_from or not date_to:
-        yesterday = datetime.now() - timedelta(days=1)
-        date_from = yesterday.strftime("%Y%m%d")
-        date_to = yesterday.strftime("%Y%m%d")
-
-    url = "https://api.express-pay.by/v1/payments"  # ✅ используем напрямую, без новой переменной
+def get_payments_sum(token: str, date_from: str, date_to: str):
+    url = "https://api.express-pay.by/v1/payments"
     params = {
         "token": token,
         "From": date_from,
@@ -46,7 +41,6 @@ def get_payments_sum(token: str, date_from: str = None, date_to: str = None):
     }
 
     response = requests.get(url, params=params)
-
     if response.status_code != 200:
         return None, f"Ошибка {response.status_code}: {response.text}"
 
@@ -60,7 +54,6 @@ def get_payments_sum(token: str, date_from: str = None, date_to: str = None):
 
     items = data.get("Items", [])
     total_amount = sum(float(item.get("Amount", 0)) for item in items)
-
     return total_amount, None
 
 
@@ -85,15 +78,34 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Введите номер счёта:")
         context.user_data["action"] = "check_status"
 
-    elif query.data == "get_payments":  # ✅ новая функция
-        await query.message.reply_text("⏳ Получаю данные об оплатах за вчера...")
+    elif query.data == "get_payments_menu":
+        await query.message.reply_text("Выберите период:", reply_markup=payments_menu())
 
-        total, error = get_payments_sum(EXPRESS_PAY_TOKEN)
+    elif query.data.startswith("payments_"):
+        now = datetime.now()
+        if query.data == "payments_today":
+            date_from = now.strftime("%Y%m%d")
+            date_to = now.strftime("%Y%m%d")
+            period_text = "сегодня"
+
+        elif query.data == "payments_yesterday":
+            yesterday = now - timedelta(days=1)
+            date_from = date_to = yesterday.strftime("%Y%m%d")
+            period_text = "вчера"
+
+        elif query.data == "payments_last3":
+            date_to = (now - timedelta(days=1)).strftime("%Y%m%d")
+            date_from = (now - timedelta(days=3)).strftime("%Y%m%d")
+            period_text = "за последние три дня (без учёта сегодня)"
+
+        await query.message.reply_text(f"⏳ Получаю данные об оплатах {period_text}...")
+
+        total, error = get_payments_sum(EXPRESS_PAY_TOKEN, date_from, date_to)
         if error:
             await query.message.reply_text(f"❌ Ошибка: {error}", reply_markup=main_menu())
         else:
             await query.message.reply_text(
-                f"📅 Общая сумма оплат за вчера: *{total:.2f} BYN*",
+                f"📅 Общая сумма оплат {period_text}: *{total:.2f} BYN*",
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
@@ -110,20 +122,12 @@ def get_invoice_details(invoice_no: int):
 
 # === Получение списка счетов по AccountNo ===
 def get_invoice_list(token: str, account_no: str):
-    """Получает список счетов по AccountNo (без подписи, без параметра From)."""
-    params = {
-        "Token": token,
-        "AccountNo": account_no
-    }
-
+    params = {"Token": token, "AccountNo": account_no}
     response = requests.get(API_URL, params=params)
-
     try:
-        data = response.json()
+        return response.json()
     except Exception:
-        data = {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
-
-    return data
+        return {"Error": {"Msg": "Некорректный ответ от ExpressPay"}}
 
 
 # === Обработка сообщений ===
@@ -132,7 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "create_invoice":
         amount = update.message.text.strip().replace(",", ".")
-        account_no = get_next_account_no()
+        account_no = datetime.now().strftime("%d%m%y%H%M%S")
 
         data = {
             "Token": EXPRESS_PAY_TOKEN,
@@ -159,8 +163,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await update.message.reply_text(
-                    f"✅ Счёт выставлен, но не удалось получить детали.\n"
-                    f"InvoiceNo: {invoice_no}",
+                    f"✅ Счёт выставлен, но не удалось получить детали.\nInvoiceNo: {invoice_no}",
                     reply_markup=main_menu()
                 )
         else:
@@ -168,19 +171,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Ошибка при выставлении счёта:\n{response.text}",
                 reply_markup=main_menu()
             )
-
         context.user_data.clear()
 
     elif action == "check_status":
         account_display = update.message.text.strip()
-
-        if "-" in account_display:
-            account_no = account_display.split("-")[-1].strip()
-        else:
-            account_no = account_display.strip()
+        account_no = account_display.split("-")[-1] if "-" in account_display else account_display
 
         data = get_invoice_list(EXPRESS_PAY_TOKEN, account_no)
-
         if "Error" in data:
             await update.message.reply_text(
                 f"❌ Ошибка от ExpressPay:\n{data['Error']['Msg']}",
@@ -197,7 +194,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Берём последний счёт из списка
         invoice = items[-1]
         status = int(invoice.get("Status", 0))
         amount = invoice.get("Amount", "—")
@@ -226,7 +222,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
-
         context.user_data.clear()
 
     else:
@@ -236,13 +231,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Запуск ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     port = int(os.environ.get("PORT", 8443))
-
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
